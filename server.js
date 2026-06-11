@@ -4,22 +4,33 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { fetchDamData } = require('./lib/dam');
+const { fetchDamData, fetchDamList } = require('./lib/dam');
 
 const PORT = process.env.PORT || 3000;
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml' };
 
+const sendJson = (res, code, obj) => {
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(obj));
+};
+
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/api/dam') {
     try {
-      const data = await fetchDamData();
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify(data));
+      sendJson(res, 200, await fetchDamData(url.searchParams.get('ccd') || undefined));
     } catch (e) {
-      res.writeHead(502, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: String(e.message || e) }));
+      sendJson(res, 502, { error: String(e.message || e) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/dams') {
+    try {
+      const list = await fetchDamList();
+      sendJson(res, 200, list.map(d => ({ ccd: d.ccd, name: d.name, river: d.river })));
+    } catch (e) {
+      sendJson(res, 502, { error: String(e.message || e) });
     }
     return;
   }
