@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>下久保ダム 貯水状況</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root {
+    --bg: #0f1923;
+    --panel: #182733;
+    --line: #2a3d4d;
+    --text: #e8f0f6;
+    --muted: #8aa3b5;
+    --water: #2e9fd8;
+    --accent: #5ec8f2;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Hiragino Sans", "Noto Sans JP", sans-serif;
+    padding: 24px 16px 48px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  header h1 { font-size: 26px; }
+  header .sub { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  .grid {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 16px;
+    margin-top: 20px;
+  }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px;
+  }
+  .tank-title { font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+  .rate { font-size: 44px; font-weight: 700; color: var(--accent); line-height: 1; }
+  .rate small { font-size: 18px; color: var(--muted); font-weight: 400; }
+  .rate-note { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .card { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .card .label { font-size: 12px; color: var(--muted); }
+  .card .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+  .card .unit { font-size: 12px; color: var(--muted); }
+  .chart-panel { margin-top: 16px; }
+  .chart-panel h2 { font-size: 15px; margin-bottom: 12px; }
+  .chart-box { position: relative; height: 220px; }
+  .chart-box.small { height: 180px; }
+  footer { margin-top: 24px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+  footer a { color: var(--accent); }
+  #status { color: var(--muted); margin-top: 40px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>下久保ダム 貯水状況</h1>
+    <div class="sub" id="meta">読み込み中…</div>
+  </header>
+
+  <div id="status">データを取得しています…</div>
+
+  <div id="content" style="display:none">
+    <div class="grid">
+      <div class="panel">
+        <div class="tank-title">貯水率（有効貯水容量比）</div>
+        <div class="rate"><span id="rate">--</span><small> %</small></div>
+        <div class="rate-note">有効貯水容量 <span id="capEff">--</span> 千m³</div>
+        <svg id="tank" viewBox="0 0 240 200" style="width:100%; margin-top:14px">
+          <!-- ダム堤体（右側） -->
+          <polygon points="170,30 210,170 170,170" fill="#5a6f80"/>
+          <!-- 貯水池の枠 -->
+          <polygon points="20,170 170,170 170,30 20,80" fill="#0a141c" stroke="#2a3d4d"/>
+          <!-- 水（高さはJSで更新） -->
+          <clipPath id="basin"><polygon points="20,170 170,170 170,30 20,80"/></clipPath>
+          <rect id="waterRect" x="20" y="170" width="150" height="0" fill="var(--water)" opacity="0.85" clip-path="url(#basin)"/>
+          <line id="waterLine" x1="20" x2="170" y1="170" y2="170" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <text id="levelText" x="26" y="164" font-size="11" fill="#cfe8f5"></text>
+        </svg>
+      </div>
+
+      <div class="panel">
+        <div class="cards">
+          <div class="card"><div class="label">貯水量</div><div class="value" id="storage">--</div><div class="unit">千m³</div></div>
+          <div class="card"><div class="label">貯水位</div><div class="value" id="level">--</div><div class="unit">EL.m</div></div>
+          <div class="card"><div class="label">流入量</div><div class="value" id="inflow">--</div><div class="unit">m³/s</div></div>
+          <div class="card"><div class="label">放流量</div><div class="value" id="outflow">--</div><div class="unit">m³/s</div></div>
+        </div>
+        <div class="chart-panel">
+          <h2>貯水量の推移（過去24時間）</h2>
+          <div class="chart-box small"><canvas id="storageChart"></canvas></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel chart-panel">
+      <h2>流入量・放流量の推移（過去24時間）</h2>
+      <div class="chart-box"><canvas id="flowChart"></canvas></div>
+    </div>
+  </div>
+
+  <footer>
+    出典: <a href="https://suibo-river.pref.saitama.lg.jp/damDetail.html?ccd=12331400006" target="_blank">埼玉県 川の防災情報</a>（約10分毎更新）。
+    本ページは非公式の可視化ツールです。防災判断には必ず公式情報を参照してください。
+  </footer>
+</div>
+
+<script>
+const fmt = (n, digits = 0) =>
+  n == null ? '--' : n.toLocaleString('ja-JP', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+
+async function load() {
+  const res = await fetch('/api/dam');
+  if (!res.ok) throw new Error('API error');
+  const d = await res.json();
+  if (d.error) throw new Error(d.error);
+
+  document.getElementById('meta').textContent =
+    `${d.river} ／ ${d.location} ／ 観測時刻 ${d.observedAt}`;
+
+  const rate = d.effectiveCapacity ? (d.storage / d.effectiveCapacity) * 100 : null;
+  document.getElementById('rate').textContent = rate == null ? '--' : rate.toFixed(1);
+  document.getElementById('capEff').textContent = fmt(d.effectiveCapacity);
+  document.getElementById('storage').textContent = fmt(d.storage);
+  document.getElementById('level').textContent = fmt(d.level, 2);
+  document.getElementById('inflow').textContent = fmt(d.inflow, 2);
+  document.getElementById('outflow').textContent = fmt(d.outflow, 2);
+
+  // 貯水池の水位を描画（y=170が底、y=30が満水ライン）
+  if (rate != null) {
+    const top = 170 - (140 * Math.min(rate, 100)) / 100;
+    const water = document.getElementById('waterRect');
+    water.setAttribute('y', top);
+    water.setAttribute('height', 170 - top);
+    const line = document.getElementById('waterLine');
+    line.setAttribute('y1', top);
+    line.setAttribute('y2', top);
+    const label = document.getElementById('levelText');
+    label.setAttribute('y', Math.max(top - 6, 42));
+    label.textContent = `EL. ${fmt(d.level, 2)} m`;
+  }
+
+  const labels = d.series.map(p => p.time);
+  const common = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    scales: {
+      x: { ticks: { color: '#8aa3b5', maxTicksLimit: 8 }, grid: { color: '#22323f' } },
+      y: { ticks: { color: '#8aa3b5' }, grid: { color: '#22323f' } },
+    },
+    plugins: { legend: { labels: { color: '#e8f0f6' } } },
+  };
+
+  new Chart(document.getElementById('storageChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: '貯水量（千m³）',
+        data: d.series.map(p => p.storage),
+        borderColor: '#5ec8f2',
+        backgroundColor: 'rgba(46,159,216,0.25)',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 0,
+      }],
+    },
+    options: common,
+  });
+
+  new Chart(document.getElementById('flowChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: '流入量（m³/s）', data: d.series.map(p => p.inflow), borderColor: '#6fd692', tension: 0.3, pointRadius: 0 },
+        { label: '放流量（m³/s）', data: d.series.map(p => p.outflow), borderColor: '#f2a65e', tension: 0.3, pointRadius: 0 },
+      ],
+    },
+    options: common,
+  });
+
+  document.getElementById('status').style.display = 'none';
+  document.getElementById('content').style.display = '';
+}
+
+load().catch(e => {
+  document.getElementById('status').textContent = `データの取得に失敗しました: ${e.message}`;
+});
+</script>
+</body>
+</html>
